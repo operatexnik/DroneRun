@@ -22,7 +22,6 @@ class GameScreen : ScreenAdapter() {
         data.setScale(2f)
     }
 
-    // --- Звук ---
     private val propellerSound: Music? = try {
         if (Gdx.files.internal("propeller.mp3").exists()) {
             Gdx.audio.newMusic(Gdx.files.internal("propeller.mp3")).apply {
@@ -32,7 +31,6 @@ class GameScreen : ScreenAdapter() {
         } else null
     } catch (e: Exception) { null }
 
-    // --- Текстуры ---
     private val bgTexture = Texture("stone.png").apply {
         setFilter(TextureFilter.Nearest, TextureFilter.Nearest)
     }
@@ -46,7 +44,6 @@ class GameScreen : ScreenAdapter() {
 
     private var bgScrollTimer = 0f
 
-    // --- Анимация дрона ---
     private val droneBounds = Rectangle(200f, 360f, 100f, 50f)
 
     private val droneOnTexture = Texture("drone_on.png").apply {
@@ -68,7 +65,6 @@ class GameScreen : ScreenAdapter() {
         droneAnimation = Animation(0.1f, keyFrames, Animation.PlayMode.LOOP)
     }
 
-    // --- Физика ---
     private var velocityX = 0f
     private var velocityY = 0f
     private val maxSpeed = 600f
@@ -78,7 +74,6 @@ class GameScreen : ScreenAdapter() {
     private val drag = 0.94f
     private var rotationAngle = 0f
 
-    // --- Аметисты ---
     inner class Amethyst(var x: Float, var y: Float) {
         val size = 36f
         val bounds = Rectangle(x, y, size, size)
@@ -103,35 +98,47 @@ class GameScreen : ScreenAdapter() {
         val blockSize = 64f
         var scored = false
 
+        val isDoubleGap: Boolean = !isFlyingBlock && MathUtils.randomBoolean(0.25f)
+
         val bottomBlocks: Int
         val topBlocks: Int
         val gapBlocks: Int
 
-        var spikeType: Int = 0
+        var sideSpikePos: Int = 0
 
         val bottomBounds: Rectangle
         val topBounds: Rectangle
+        var middleBounds: Rectangle? = null
         var sideSpikeBounds: Rectangle? = null
-
-        // Флаг для удобной проверки наличия бокового шипа
-        val hasSideSpike: Boolean get() = sideSpikeBounds != null
-
         val crystal: Amethyst?
 
         init {
             if (isFlyingBlock) {
-                spikeType = 0
+                sideSpikePos = 0
                 val passTop = MathUtils.randomBoolean()
                 if (passTop) {
-                    bottomBlocks = 6
+                    bottomBlocks = 7
                     topBlocks = 0
                 } else {
                     bottomBlocks = 0
-                    topBlocks = 6
+                    topBlocks = 7
                 }
-                gapBlocks = 5
+                gapBlocks = 4
+                crystal = null
+            } else if (isDoubleGap) {
+                sideSpikePos = 0
+                bottomBlocks = 2
+                topBlocks = 2
+                gapBlocks = 7
+
+                val crystalY = 720f - (topBlocks * blockSize) - blockSize - 18f
+                crystal = Amethyst(x + (width / 2f) - 18f, crystalY)
             } else {
-                spikeType = MathUtils.random(0, 1)
+                if (MathUtils.randomBoolean(0.30f)) {
+                    sideSpikePos = MathUtils.random(1, 2)
+                } else {
+                    sideSpikePos = 0
+                }
 
                 var blocks: Int
                 do {
@@ -140,66 +147,67 @@ class GameScreen : ScreenAdapter() {
                 lastBottomBlocks = blocks
 
                 bottomBlocks = blocks
-                gapBlocks = if (spikeType == 1 && bottomBlocks >= 2) 5 else 4
+
+                val hasSideSpike = (sideSpikePos == 1 && bottomBlocks >= 2) || (sideSpikePos == 2 && (11 - bottomBlocks - 4) >= 2)
+                gapBlocks = if (hasSideSpike) 5 else 4
                 topBlocks = (11 - bottomBlocks - gapBlocks).coerceAtLeast(0)
+
+                crystal = if (MathUtils.randomBoolean(0.10f)) {
+                    val bottomY = bottomBlocks * blockSize
+                    val crystalY = bottomY + (gapBlocks * blockSize / 2f) - 18f
+                    Amethyst(x + (width / 2f) - 18f, crystalY)
+                } else null
             }
 
+            // Гарантированная инициализация прямоугольников для ВСЕХ вариантов
             val bottomY = bottomBlocks * blockSize
             val topY = 720f - (topBlocks * blockSize)
-
             bottomBounds = Rectangle(x, 0f, width, bottomY)
             topBounds = Rectangle(x, topY, width, topBlocks * blockSize)
 
-            sideSpikeBounds = if (spikeType == 1 && bottomBlocks >= 2 && !isFlyingBlock) {
-                val sideY = (bottomBlocks - 2) * blockSize
-                Rectangle(x - 24f, sideY + 12f, 24f, blockSize - 24f)
-            } else null
+            // Настройка среднего блока (для двойного пролета)
+            if (isDoubleGap) {
+                val middleY = 3.5f * blockSize
+                middleBounds = Rectangle(x, middleY, width, blockSize * 2f)
+            }
 
-            crystal = if (!isFlyingBlock && MathUtils.randomBoolean(0.10f)) {
-                val crystalY = bottomY + (gapBlocks * blockSize / 2f) - 18f
-                Amethyst(x + (width / 2f) - 18f, crystalY)
-            } else null
+            // Настройка боковых шипов
+            sideSpikeBounds = when {
+                sideSpikePos == 1 && bottomBlocks >= 2 && !isFlyingBlock -> {
+                    val sideY = (bottomBlocks - 2) * blockSize
+                    Rectangle(x - 24f, sideY + 12f, 24f, blockSize - 24f)
+                }
+                sideSpikePos == 2 && topBlocks >= 2 && !isFlyingBlock -> {
+                    val sideY = 720f - ((topBlocks - 1) * blockSize)
+                    Rectangle(x - 24f, sideY + 12f, 24f, blockSize - 24f)
+                }
+                else -> null
+            }
         }
 
         fun update(delta: Float, speed: Float) {
             x -= speed * delta
             bottomBounds.x = x
             topBounds.x = x
-            sideSpikeBounds?.x = x - 30f
+            middleBounds?.x = x
+            sideSpikeBounds?.x = x - 24f
             crystal?.update(delta, speed)
         }
 
         fun draw(batch: SpriteBatch) {
             val overlap = 2f
 
-            // Рисуем нижний столб блоков
+            // 1. Нижний столб
             for (i in 0 until bottomBlocks) {
                 val drawY = i * blockSize
-
                 if (i == bottomBlocks - 1 && !isFlyingBlock) {
-                    // Верхушка нижнего столба — обычный вертикальный шип
                     batch.draw(spikeTex, x, drawY - overlap, width, blockSize + overlap)
                 } else {
-                    // Обычный блок
                     batch.draw(blockTex, x, drawY, width, blockSize)
-                }
-
-                // Если это предпоследний (смежный) блок и есть флаг — рисуем из него боковой шип
-                if (hasSideSpike && i == bottomBlocks - 2 && !isFlyingBlock) {
-                    batch.draw(
-                        spikeTex,
-                        x - blockSize + 10f, drawY,
-                        blockSize / 2f, blockSize / 2f,
-                        blockSize, blockSize,
-                        1f, 1f,
-                        90f, 0, 0,
-                        spikeTex.width, spikeTex.height,
-                        false, false
-                    )
                 }
             }
 
-            // Рисуем верхний столб блоков
+            // 2. Верхний столб
             for (i in 0 until topBlocks) {
                 val drawY = 720f - ((i + 1) * blockSize)
                 if (i == topBlocks - 1 && !isFlyingBlock) {
@@ -218,12 +226,56 @@ class GameScreen : ScreenAdapter() {
                 }
             }
 
+            // 3. Средний блок с шипами для ДВОЙНОГО ПРОЛЁТА
+            middleBounds?.let { m ->
+                val mY = m.y
+                val mH = m.height
+
+                batch.draw(
+                    spikeTex,
+                    x, mY,
+                    width / 2f, blockSize / 2f,
+                    width, blockSize,
+                    1f, 1f,
+                    180f, 0, 0,
+                    spikeTex.width, spikeTex.height,
+                    false, false
+                )
+
+                batch.draw(spikeTex, x, mY + mH - blockSize, width, blockSize)
+            }
+
+            // 4. Отрисовка бокового шипа
+            if (sideSpikePos == 1 && bottomBlocks >= 2 && !isFlyingBlock) {
+                val sideY = (bottomBlocks - 2) * blockSize
+                batch.draw(
+                    spikeTex,
+                    x - blockSize + 10f, sideY,
+                    blockSize / 2f, blockSize / 2f,
+                    blockSize, blockSize,
+                    1f, 1f,
+                    90f, 0, 0,
+                    spikeTex.width, spikeTex.height,
+                    false, false
+                )
+            } else if (sideSpikePos == 2 && topBlocks >= 2 && !isFlyingBlock) {
+                val sideY = 720f - ((topBlocks - 1) * blockSize)
+                batch.draw(
+                    spikeTex,
+                    x - blockSize + 10f, sideY,
+                    blockSize / 2f, blockSize / 2f,
+                    blockSize, blockSize,
+                    1f, 1f,
+                    90f, 0, 0,
+                    spikeTex.width, spikeTex.height,
+                    false, false
+                )
+            }
+
             crystal?.draw(batch)
         }
     }
-
     private val obstacles = GdxArray<ObstaclePattern>()
-    // Чуть-чуть ускорили спавнрейт для драйва
     private val spawnInterval = 1.15f
     private var spawnTimer = 0f
     private var baseObstacleSpeed = 300f
@@ -289,12 +341,14 @@ class GameScreen : ScreenAdapter() {
 
         bgScrollTimer += delta * (actualScrollSpeed * 0.005f)
 
+        // МЯГКИЕ ГРАНИЦЫ ЭКРАНА (без смерти)
         if (droneBounds.x < 0f) { droneBounds.x = 0f; velocityX = 0f }
         if (droneBounds.x > 1280f - droneBounds.width) { droneBounds.x = 1280f - droneBounds.width; velocityX = 0f }
+        if (droneBounds.y < 0f) droneBounds.y = 0f
+        if (droneBounds.y > 720f - droneBounds.height) droneBounds.y = 720f - droneBounds.height
 
-        if (droneBounds.y <= 0f || droneBounds.y >= 720f - droneBounds.height) {
-            gameOver()
-        }
+        // --- NOCLIP: Смерть от границ экрана отключена ---
+        // if (droneBounds.y <= 0f || droneBounds.y >= 720f - droneBounds.height) { gameOver() }
 
         spawnTimer += delta
         if (spawnTimer >= spawnInterval) {
@@ -302,7 +356,6 @@ class GameScreen : ScreenAdapter() {
 
             obstacles.add(ObstaclePattern(1280f, isFlyingBlock = is15Level))
 
-            // Шанс 20% на близкий спавн двойной трубы
             if (!is15Level && MathUtils.randomBoolean(0.20f)) {
                 obstacles.add(ObstaclePattern(1280f + 320f))
                 spawnTimer = -0.4f
@@ -317,7 +370,8 @@ class GameScreen : ScreenAdapter() {
 
             obstacle.update(delta, actualScrollSpeed)
 
-            // Проверка столкновений
+            // --- NOCLIP: Проверка столкновений отключена ---
+            /*
             val hitsBottom = obstacle.bottomBounds.overlaps(droneBounds)
             val hitsTop = obstacle.topBounds.overlaps(droneBounds)
             val hitsSideSpike = obstacle.sideSpikeBounds?.overlaps(droneBounds) == true
@@ -325,6 +379,7 @@ class GameScreen : ScreenAdapter() {
             if (hitsBottom || hitsTop || hitsSideSpike) {
                 gameOver()
             }
+            */
 
             obstacle.crystal?.let { crystal ->
                 if (!crystal.collected && crystal.bounds.overlaps(droneBounds)) {
