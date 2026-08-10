@@ -4,7 +4,6 @@ import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.Input
 import com.badlogic.gdx.ScreenAdapter
 import com.badlogic.gdx.audio.Music
-import com.badlogic.gdx.controllers.Controllers
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.GL20
 import com.badlogic.gdx.graphics.Texture
@@ -42,13 +41,8 @@ class GameScreen : ScreenAdapter() {
         Texture("amethyst_shard.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
     } catch (e: Exception) { null }
 
-    private val topBaseTex = Texture("pointed_dripstone_down_base.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
-    private val topMiddleTex = Texture("pointed_dripstone_down_middle.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
-    private val topTipTex = Texture("pointed_dripstone_down_tip.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
-
-    private val bottomBaseTex = Texture("pointed_dripstone_up_base.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
-    private val bottomMiddleTex = Texture("pointed_dripstone_up_middle.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
-    private val bottomTipTex = Texture("pointed_dripstone_up_tip.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    private val blockTex = Texture("block.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    private val spikeTex = Texture("spike.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
 
     private var bgScrollTimer = 0f
 
@@ -78,12 +72,13 @@ class GameScreen : ScreenAdapter() {
     private var velocityX = 0f
     private var velocityY = 0f
     private val maxSpeed = 600f
-    private val acceleration = 2200f
+    private val accelerationY = 2200f
+    private val accelerationX = 1500f
     private val gravity = 900f
     private val drag = 0.94f
     private var rotationAngle = 0f
 
-    // --- Монетки / Кристаллы ---
+    // --- Аметисты ---
     inner class Amethyst(var x: Float, var y: Float) {
         val size = 36f
         val bounds = Rectangle(x, y, size, size)
@@ -102,70 +97,134 @@ class GameScreen : ScreenAdapter() {
     }
 
     private var lastBottomBlocks = -1
-    // --- Препятствия (Капельники) ---
-    inner class Dripstone(var x: Float) {
+
+    inner class ObstaclePattern(var x: Float, val isFlyingBlock: Boolean = false) {
         val width = 64f
         val blockSize = 64f
         var scored = false
 
-        // Генерируем высоту так, чтобы она не совпадала с предыдущим капельником
-        val bottomBlocks: Int = run {
-            var blocks: Int
-            do {
-                blocks = MathUtils.random(2, 6)
-            } while (blocks == lastBottomBlocks) // Повторяем выбор, если значение совпало
-            lastBottomBlocks = blocks
-            blocks
+        val bottomBlocks: Int
+        val topBlocks: Int
+        val gapBlocks: Int
+
+        var spikeType: Int = 0
+
+        val bottomBounds: Rectangle
+        val topBounds: Rectangle
+        var sideSpikeBounds: Rectangle? = null
+
+        // Флаг для удобной проверки наличия бокового шипа
+        val hasSideSpike: Boolean get() = sideSpikeBounds != null
+
+        val crystal: Amethyst?
+
+        init {
+            if (isFlyingBlock) {
+                spikeType = 0
+                val passTop = MathUtils.randomBoolean()
+                if (passTop) {
+                    bottomBlocks = 6
+                    topBlocks = 0
+                } else {
+                    bottomBlocks = 0
+                    topBlocks = 6
+                }
+                gapBlocks = 5
+            } else {
+                spikeType = MathUtils.random(0, 1)
+
+                var blocks: Int
+                do {
+                    blocks = MathUtils.random(1, 4)
+                } while (blocks == lastBottomBlocks)
+                lastBottomBlocks = blocks
+
+                bottomBlocks = blocks
+                gapBlocks = if (spikeType == 1 && bottomBlocks >= 2) 5 else 4
+                topBlocks = (11 - bottomBlocks - gapBlocks).coerceAtLeast(0)
+            }
+
+            val bottomY = bottomBlocks * blockSize
+            val topY = 720f - (topBlocks * blockSize)
+
+            bottomBounds = Rectangle(x, 0f, width, bottomY)
+            topBounds = Rectangle(x, topY, width, topBlocks * blockSize)
+
+            sideSpikeBounds = if (spikeType == 1 && bottomBlocks >= 2 && !isFlyingBlock) {
+                val sideY = (bottomBlocks - 2) * blockSize
+                Rectangle(x - 24f, sideY + 12f, 24f, blockSize - 24f)
+            } else null
+
+            crystal = if (!isFlyingBlock && MathUtils.randomBoolean(0.10f)) {
+                val crystalY = bottomY + (gapBlocks * blockSize / 2f) - 18f
+                Amethyst(x + (width / 2f) - 18f, crystalY)
+            } else null
         }
-
-        val gapBlocks = 3
-        val topBlocks = 12 - bottomBlocks - gapBlocks
-
-        val bottomY = bottomBlocks * blockSize
-        val topY = bottomY + gapBlocks * blockSize
-
-        val bottomBounds = Rectangle(x, 0f, width, bottomY)
-        val topBounds = Rectangle(x, topY, width, 720f - topY)
-
-        val crystal: Amethyst? = if (MathUtils.randomBoolean(0.2f)) { // Шанс 20%
-            val crystalY = bottomY + (gapBlocks * blockSize / 2f) - 18f
-            Amethyst(x + (width / 2f) - 18f, crystalY)
-        } else null
 
         fun update(delta: Float, speed: Float) {
             x -= speed * delta
             bottomBounds.x = x
             topBounds.x = x
+            sideSpikeBounds?.x = x - 30f
             crystal?.update(delta, speed)
         }
 
         fun draw(batch: SpriteBatch) {
+            val overlap = 2f
+
+            // Рисуем нижний столб блоков
             for (i in 0 until bottomBlocks) {
                 val drawY = i * blockSize
-                val tex = when (i) {
-                    0 -> bottomBaseTex
-                    bottomBlocks - 1 -> bottomTipTex
-                    else -> bottomMiddleTex
+
+                if (i == bottomBlocks - 1 && !isFlyingBlock) {
+                    // Верхушка нижнего столба — обычный вертикальный шип
+                    batch.draw(spikeTex, x, drawY - overlap, width, blockSize + overlap)
+                } else {
+                    // Обычный блок
+                    batch.draw(blockTex, x, drawY, width, blockSize)
                 }
-                batch.draw(tex, x, drawY, width, blockSize)
+
+                // Если это предпоследний (смежный) блок и есть флаг — рисуем из него боковой шип
+                if (hasSideSpike && i == bottomBlocks - 2 && !isFlyingBlock) {
+                    batch.draw(
+                        spikeTex,
+                        x - blockSize + 10f, drawY,
+                        blockSize / 2f, blockSize / 2f,
+                        blockSize, blockSize,
+                        1f, 1f,
+                        90f, 0, 0,
+                        spikeTex.width, spikeTex.height,
+                        false, false
+                    )
+                }
             }
 
+            // Рисуем верхний столб блоков
             for (i in 0 until topBlocks) {
-                val drawY = topY + i * blockSize
-                val tex = when (i) {
-                    0 -> topTipTex
-                    topBlocks - 1 -> topBaseTex
-                    else -> topMiddleTex
+                val drawY = 720f - ((i + 1) * blockSize)
+                if (i == topBlocks - 1 && !isFlyingBlock) {
+                    batch.draw(
+                        spikeTex,
+                        x, drawY,
+                        width / 2f, (blockSize + overlap) / 2f,
+                        width, blockSize + overlap,
+                        1f, 1f,
+                        180f, 0, 0,
+                        spikeTex.width, spikeTex.height,
+                        false, false
+                    )
+                } else {
+                    batch.draw(blockTex, x, drawY, width, blockSize)
                 }
-                batch.draw(tex, x, drawY, width, blockSize)
             }
 
             crystal?.draw(batch)
         }
     }
 
-    private val obstacles = GdxArray<Dripstone>()
-    private val spawnInterval = 1.1f // Уменьшили интервал спавна (было 1.6s)
+    private val obstacles = GdxArray<ObstaclePattern>()
+    // Чуть-чуть ускорили спавнрейт для драйва
+    private val spawnInterval = 1.15f
     private var spawnTimer = 0f
     private var baseObstacleSpeed = 300f
 
@@ -212,16 +271,8 @@ class GameScreen : ScreenAdapter() {
         if (Gdx.input.isKeyPressed(Input.Keys.A) || Gdx.input.isKeyPressed(Input.Keys.LEFT)) inputX -= 1f
         if (Gdx.input.isKeyPressed(Input.Keys.D) || Gdx.input.isKeyPressed(Input.Keys.RIGHT)) inputX += 1f
 
-        val controller = Controllers.getControllers().firstOrNull()
-        if (controller != null) {
-            val axisX = controller.getAxis(0)
-            val axisY = -controller.getAxis(1)
-            if (Math.abs(axisX) > 0.2f) inputX = axisX
-            if (Math.abs(axisY) > 0.2f) inputY = axisY
-        }
-
-        velocityX += inputX * acceleration * delta
-        velocityY += inputY * acceleration * delta
+        velocityX += inputX * accelerationX * delta
+        velocityY += inputY * accelerationY * delta
 
         velocityX *= drag
         velocityY *= drag
@@ -247,8 +298,17 @@ class GameScreen : ScreenAdapter() {
 
         spawnTimer += delta
         if (spawnTimer >= spawnInterval) {
-            obstacles.add(Dripstone(1280f))
-            spawnTimer = 0f
+            val is15Level = (score > 0) && (score % 15 == 0)
+
+            obstacles.add(ObstaclePattern(1280f, isFlyingBlock = is15Level))
+
+            // Шанс 20% на близкий спавн двойной трубы
+            if (!is15Level && MathUtils.randomBoolean(0.20f)) {
+                obstacles.add(ObstaclePattern(1280f + 320f))
+                spawnTimer = -0.4f
+            } else {
+                spawnTimer = 0f
+            }
         }
 
         val iterator = obstacles.iterator()
@@ -257,7 +317,12 @@ class GameScreen : ScreenAdapter() {
 
             obstacle.update(delta, actualScrollSpeed)
 
-            if (obstacle.bottomBounds.overlaps(droneBounds) || obstacle.topBounds.overlaps(droneBounds)) {
+            // Проверка столкновений
+            val hitsBottom = obstacle.bottomBounds.overlaps(droneBounds)
+            val hitsTop = obstacle.topBounds.overlaps(droneBounds)
+            val hitsSideSpike = obstacle.sideSpikeBounds?.overlaps(droneBounds) == true
+
+            if (hitsBottom || hitsTop || hitsSideSpike) {
                 gameOver()
             }
 
@@ -285,12 +350,11 @@ class GameScreen : ScreenAdapter() {
 
         batch.begin()
 
-        // --- Рисуем фон (затенение вернул) ---
         val tileSize = 64f
         val offsetX = -(bgScrollTimer * 100f) % tileSize
 
         batch.disableBlending()
-        batch.color = Color(0.35f, 0.35f, 0.35f, 1f) // Вернули темный оттенок
+        batch.color = Color(0.12f, 0.12f, 0.14f, 1f)
 
         var x = offsetX - tileSize
         while (x < 1280f + tileSize) {
@@ -305,12 +369,10 @@ class GameScreen : ScreenAdapter() {
         batch.enableBlending()
         batch.color = Color.WHITE
 
-        // --- Рисуем капельники и аметисты ---
         for (obstacle in obstacles) {
             obstacle.draw(batch)
         }
 
-        // --- Рисуем дрона ---
         if (isGameOver) {
             droneBounds.y -= gravity * 2f * Gdx.graphics.deltaTime
             rotationAngle += 150f * Gdx.graphics.deltaTime
@@ -332,7 +394,6 @@ class GameScreen : ScreenAdapter() {
             rotationAngle
         )
 
-        // --- Текст UI ---
         if (isGameOver) {
             font.color = Color.RED
             font.draw(batch, "GAME OVER", 530f, 420f)
@@ -366,12 +427,8 @@ class GameScreen : ScreenAdapter() {
         droneOffTexture.dispose()
         bgTexture.dispose()
         amethystTexture?.dispose()
-        topBaseTex.dispose()
-        topMiddleTex.dispose()
-        topTipTex.dispose()
-        bottomBaseTex.dispose()
-        bottomMiddleTex.dispose()
-        bottomTipTex.dispose()
+        blockTex.dispose()
+        spikeTex.dispose()
         propellerSound?.dispose()
     }
 }
