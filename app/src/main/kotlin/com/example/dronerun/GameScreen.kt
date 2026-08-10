@@ -348,7 +348,7 @@ class GameScreen : ScreenAdapter() {
         if (droneBounds.y > 720f - droneBounds.height) droneBounds.y = 720f - droneBounds.height
 
         // --- NOCLIP: Смерть от границ экрана отключена ---
-        // if (droneBounds.y <= 0f || droneBounds.y >= 720f - droneBounds.height) { gameOver() }
+        if (droneBounds.y <= 0f || droneBounds.y >= 720f - droneBounds.height) { gameOver() }
 
         spawnTimer += delta
         if (spawnTimer >= spawnInterval) {
@@ -371,7 +371,7 @@ class GameScreen : ScreenAdapter() {
             obstacle.update(delta, actualScrollSpeed)
 
             // --- NOCLIP: Проверка столкновений отключена ---
-            /*
+
             val hitsBottom = obstacle.bottomBounds.overlaps(droneBounds)
             val hitsTop = obstacle.topBounds.overlaps(droneBounds)
             val hitsSideSpike = obstacle.sideSpikeBounds?.overlaps(droneBounds) == true
@@ -379,7 +379,6 @@ class GameScreen : ScreenAdapter() {
             if (hitsBottom || hitsTop || hitsSideSpike) {
                 gameOver()
             }
-            */
 
             obstacle.crystal?.let { crystal ->
                 if (!crystal.collected && crystal.bounds.overlaps(droneBounds)) {
