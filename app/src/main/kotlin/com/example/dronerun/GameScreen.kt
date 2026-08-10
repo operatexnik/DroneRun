@@ -43,7 +43,7 @@ class GameScreen : ScreenAdapter() {
     private val spikeTex = Texture("spike.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
 
     private var bgScrollTimer = 0f
-
+    private var isPaused = false
     private val droneBounds = Rectangle(200f, 360f, 100f, 50f)
 
     private val droneOnTexture = Texture("drone_on.png").apply {
@@ -292,11 +292,22 @@ class GameScreen : ScreenAdapter() {
     }
 
     override fun render(delta: Float) {
+        // Переключение паузы по клавише ESC
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+            isPaused = !isPaused
+            if (isPaused) {
+                propellerSound?.pause()
+            } else if (!isGameOver) {
+                propellerSound?.play()
+            }
+        }
+
         stateTime += delta
 
-        if (!isGameOver) {
+        // Обновляем логику только если игра НЕ на паузе и НЕ окончена
+        if (!isGameOver && !isPaused) {
             updateLogic(delta)
-        } else {
+        } else if (isGameOver) {
             propellerSound?.stop()
             if (Gdx.input.isKeyJustPressed(Input.Keys.R) || Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
                 restart()
@@ -304,6 +315,15 @@ class GameScreen : ScreenAdapter() {
         }
 
         draw()
+
+        // Отрисовка надписи PAUSE поверх всего
+        if (isPaused && !isGameOver) {
+            batch.begin()
+            font.color = Color.YELLOW
+            font.draw(batch, "PAUSED", 570f, 400f)
+            font.draw(batch, "Press ESC to Resume", 480f, 340f)
+            batch.end()
+        }
     }
 
     private fun gameOver() {
