@@ -98,7 +98,8 @@ class GameScreen : ScreenAdapter() {
         val blockSize = 64f
         var scored = false
 
-        val isDoubleGap: Boolean = !isFlyingBlock && MathUtils.randomBoolean(0.25f)
+        // Понизили шанс спавна "Двойного пролёта" до 15% (было 25%)
+        val isDoubleGap: Boolean = !isFlyingBlock && MathUtils.randomBoolean(0.15f)
 
         val bottomBlocks: Int
         val topBlocks: Int
@@ -131,7 +132,9 @@ class GameScreen : ScreenAdapter() {
                 topBlocks = 2
                 gapBlocks = 7
 
-                val crystalY = 720f - (topBlocks * blockSize) - blockSize - 18f
+                // Шард теперь спавнится ВНИЗУ — в самом узком месте между нижним шипом и средним блоком!
+                val bottomY = bottomBlocks * blockSize // Высота нижнего столба с шипом (128f)
+                val crystalY = bottomY + 12f // Зажимаем кристалл сразу над нижним шипом
                 crystal = Amethyst(x + (width / 2f) - 18f, crystalY)
             } else {
                 if (MathUtils.randomBoolean(0.30f)) {
@@ -159,19 +162,19 @@ class GameScreen : ScreenAdapter() {
                 } else null
             }
 
-            // Гарантированная инициализация прямоугольников для ВСЕХ вариантов
+            // Гарантированная инициализация прямоугольников
             val bottomY = bottomBlocks * blockSize
             val topY = 720f - (topBlocks * blockSize)
             bottomBounds = Rectangle(x, 0f, width, bottomY)
             topBounds = Rectangle(x, topY, width, topBlocks * blockSize)
 
-            // Настройка среднего блока (для двойного пролета)
+            // Средний блок для Двойного пролёта
             if (isDoubleGap) {
                 val middleY = 3.5f * blockSize
                 middleBounds = Rectangle(x, middleY, width, blockSize * 2f)
             }
 
-            // Настройка боковых шипов
+            // Боковые шипы
             sideSpikeBounds = when {
                 sideSpikePos == 1 && bottomBlocks >= 2 && !isFlyingBlock -> {
                     val sideY = (bottomBlocks - 2) * blockSize
@@ -226,7 +229,7 @@ class GameScreen : ScreenAdapter() {
                 }
             }
 
-            // 3. Средний блок с шипами для ДВОЙНОГО ПРОЛЁТА
+            // 3. Средний блок с двухсторонними шипами
             middleBounds?.let { m ->
                 val mY = m.y
                 val mH = m.height
@@ -275,6 +278,7 @@ class GameScreen : ScreenAdapter() {
             crystal?.draw(batch)
         }
     }
+
     private val obstacles = GdxArray<ObstaclePattern>()
     private val spawnInterval = 1.15f
     private var spawnTimer = 0f
