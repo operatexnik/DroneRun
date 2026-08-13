@@ -60,6 +60,7 @@ class GameScreen : ScreenAdapter() {
     // --- Система аккумулятора ---
     private var batteryLevel = 100f
     private var gameOverReason = ""
+    private var isBadBatteryActive = false // Флаг плохой батарейки
 
     // Независимый список батареек
     private val batteries = GdxArray<Battery>()
@@ -321,8 +322,18 @@ class GameScreen : ScreenAdapter() {
             if (!sound.isPlaying) sound.play()
         }
 
-        // --- Расход аккумулятора (1% в сек) ---
-        batteryLevel -= delta * 1.0f
+        // Горячие клавиши для быстрого спавна при съемке ролика
+        if (Gdx.input.isKeyJustPressed(Input.Keys.B)) {
+            batteries.add(Battery(1280f, 360f - 18f, isBad = false))
+        }
+        if (Gdx.input.isKeyJustPressed(Input.Keys.N)) {
+            batteries.add(Battery(1280f, 360f - 18f, isBad = true))
+        }
+
+        // --- Расход аккумулятора (5% в сек для плохой, 1% для хорошей) ---
+        val drainRate = if (isBadBatteryActive) 5.0f else 1.0f
+        batteryLevel -= delta * drainRate
+
         if (batteryLevel <= 0f) {
             batteryLevel = 0f
             gameOver("Батарея разряжена!")
@@ -361,12 +372,11 @@ class GameScreen : ScreenAdapter() {
         if (droneBounds.y < 0f) droneBounds.y = 0f
         if (droneBounds.y > 720f - droneBounds.height) droneBounds.y = 720f - droneBounds.height
 
-        // --- Независимый спавн аккумулятора каждые 20 секунд ---
+        // --- Независимый спавн аккумулятора ---
         batterySpawnTimer += delta
         if (batterySpawnTimer >= 20f) {
             batterySpawnTimer = 0f
             val isBad = MathUtils.randomBoolean(0.10f)
-            // Спавнится справа за экраном строго по центру высоты (360px)
             batteries.add(Battery(1280f, 360f - 18f, isBad))
         }
 
@@ -380,8 +390,10 @@ class GameScreen : ScreenAdapter() {
                 bat.collected = true
                 if (bat.isBad) {
                     batteryLevel = (batteryLevel - 30f).coerceAtLeast(0f)
+                    isBadBatteryActive = true
                 } else {
                     batteryLevel = (batteryLevel + 20f).coerceAtMost(100f)
+                    isBadBatteryActive = false
                 }
             }
 
@@ -409,6 +421,17 @@ class GameScreen : ScreenAdapter() {
             val obstacle = iterator.next()
 
             obstacle.update(delta, actualScrollSpeed)
+
+            // === ПРОВЕРКА КОЛЛИЗИЙ (РАСКОММЕНТИРУЙТЕ, ЧТОБЫ ОТКЛЮЧИТЬ НОУКЛИП) ===
+            val hitBottom = droneBounds.overlaps(obstacle.bottomBounds)
+            val hitTop = droneBounds.overlaps(obstacle.topBounds)
+            val hitMiddle = obstacle.middleBounds?.let { droneBounds.overlaps(it) } ?: false
+            val hitSide = obstacle.sideSpikeBounds?.let { droneBounds.overlaps(it) } ?: false
+
+            if (hitBottom || hitTop || hitMiddle || hitSide) {
+                gameOver("Столкновение!")
+                return
+            }
 
             if (!obstacle.scored && obstacle.x + obstacle.width < droneBounds.x) {
                 obstacle.scored = true
@@ -450,7 +473,6 @@ class GameScreen : ScreenAdapter() {
             obstacle.draw(batch)
         }
 
-        // Отрисовка независимых аккумуляторов
         for (bat in batteries) {
             bat.draw(batch)
         }
@@ -476,7 +498,6 @@ class GameScreen : ScreenAdapter() {
             rotationAngle
         )
 
-        // Отрисовка UI
         if (isGameOver) {
             font.color = Color.RED
             font.draw(batch, gameOverReason, 480f, 420f)
@@ -486,20 +507,29 @@ class GameScreen : ScreenAdapter() {
         } else {
             font.color = Color.YELLOW
             font.draw(batch, "Score: $score", 40f, 680f)
+
+            val activeTex = if (isBadBatteryActive) batteryBadTex else batteryGoodTex
+            activeTex?.let { tex ->
+                batch.draw(tex, 40f, 575f, 32f, 32f)
+            }
         }
 
         batch.end()
 
-        // --- Отрисовка полоски аккумулятора (ShapeRenderer) ---
         if (!isGameOver) {
             Gdx.gl.glEnable(GL20.GL_BLEND)
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
 
-            // Рамка (черная)
+            if (isBadBatteryActive && batteryLevel <= 20f) {
+                shapeRenderer.color = Color(0.35f, 0.35f, 0.35f, 0.7f)
+                val smokeX = droneBounds.x - 10f + MathUtils.random(-6f, 6f)
+                val smokeY = droneBounds.y + 20f + MathUtils.random(-6f, 6f)
+                shapeRenderer.circle(smokeX, smokeY, MathUtils.random(10f, 18f))
+            }
+
             shapeRenderer.color = Color.BLACK
             shapeRenderer.rect(40f, 620f, 204f, 24f)
 
-            // Цвет индикатора в зависимости от %
             val barColor = when {
                 batteryLevel > 60f -> Color.GREEN
                 batteryLevel > 30f -> Color.ORANGE
@@ -530,6 +560,7 @@ class GameScreen : ScreenAdapter() {
         batterySpawnTimer = 0f
         score = 0
         batteryLevel = 100f
+        isBadBatteryActive = false
         isGameOver = false
         propellerSound?.play()
     }
