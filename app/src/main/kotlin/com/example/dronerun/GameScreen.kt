@@ -37,7 +37,10 @@ class GameScreen : ScreenAdapter() {
     private val blockTex = Texture("block.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
     private val spikeTex = Texture("spike.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
 
-    // Текстуры аккумуляторов
+    private val amethystTexture = try {
+        Texture("amethyst_shard.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    } catch (e: Exception) { null }
+
     private val batteryGoodTex = try {
         Texture("battery_green.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
     } catch (e: Exception) { null }
@@ -48,30 +51,66 @@ class GameScreen : ScreenAdapter() {
 
     private var bgScrollTimer = 0f
     private var isPaused = false
+    private var isMuted = false
     private var batterySpawnTimer = 0f
     private val droneBounds = Rectangle(200f, 360f, 100f, 50f)
 
     private val droneOnTexture = Texture("drone_on.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
     private val droneOffTexture = Texture("drone_off.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
 
-    private val droneAnimation: Animation<TextureRegion>
-    private var stateTime = 0f
+    // Текстуры для анимации ходьбы
+    private val walk1OnTex = try {
+        Texture("walk_1_on.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    } catch (e: Exception) { droneOnTexture }
 
-    // --- Система аккумулятора ---
+    private val walk2OnTex = try {
+        Texture("walk_2_on.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    } catch (e: Exception) { droneOnTexture }
+
+    private val walk1OffTex = try {
+        Texture("walk_1_off.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    } catch (e: Exception) { droneOffTexture }
+
+    private val walk2OffTex = try {
+        Texture("walk_2_off.png").apply { setFilter(TextureFilter.Nearest, TextureFilter.Nearest) }
+    } catch (e: Exception) { droneOffTexture }
+
+    private val flyAnimation: Animation<TextureRegion>
+    private val walkAnimation: Animation<TextureRegion>
+    private var stateTime = 0f
+    private var walkStateTime = 0f
+
+    enum class GameStage {
+        SPIKES_100,
+        EMPTY_TRANSITION,
+        WALKING_GAME
+    }
+
+    private var currentStage = GameStage.SPIKES_100
+    private var transitionDistance = 0f
+    private val transitionTargetDistance = 2560f // 2 экрана (1280 * 2)
+
     private var batteryLevel = 100f
     private var gameOverReason = ""
-    private var isBadBatteryActive = false // Флаг плохой батарейки
+    private var isBadBatteryActive = false
 
-    // Независимый список батареек
     private val batteries = GdxArray<Battery>()
 
     init {
-        val keyFrames = GdxArray<TextureRegion>()
-        keyFrames.add(TextureRegion(droneOnTexture))
-        for (i in 0..6) {
-            keyFrames.add(TextureRegion(droneOffTexture))
-        }
-        droneAnimation = Animation(0.1f, keyFrames, Animation.PlayMode.LOOP)
+        // Анимация полета
+        val flyFrames = GdxArray<TextureRegion>()
+        flyFrames.add(TextureRegion(droneOnTexture))
+        flyFrames.add(TextureRegion(droneOffTexture))
+        flyAnimation = Animation(0.1f, flyFrames, Animation.PlayMode.LOOP)
+
+        // Анимация ходьбы: drone_on - walk_1_off - walk_2_on - walk_1_on - walk_2_off
+        val walkFrames = GdxArray<TextureRegion>()
+        walkFrames.add(TextureRegion(droneOnTexture))
+        walkFrames.add(TextureRegion(walk1OffTex))
+        walkFrames.add(TextureRegion(walk2OnTex))
+        walkFrames.add(TextureRegion(walk1OnTex))
+        walkFrames.add(TextureRegion(walk2OffTex))
+        walkAnimation = Animation(0.15f, walkFrames, Animation.PlayMode.LOOP)
     }
 
     private var velocityX = 0f
@@ -83,7 +122,23 @@ class GameScreen : ScreenAdapter() {
     private val drag = 0.94f
     private var rotationAngle = 0f
 
-    // Класс Батарейки
+    inner class Amethyst(var x: Float, var y: Float) {
+        val size = 36f
+        val bounds = Rectangle(x, y, size, size)
+        var collected = false
+
+        fun update(delta: Float, speed: Float) {
+            x -= speed * delta
+            bounds.x = x
+        }
+
+        fun draw(batch: SpriteBatch) {
+            if (!collected && amethystTexture != null) {
+                batch.draw(amethystTexture, x, y, size, size)
+            }
+        }
+    }
+
     inner class Battery(var x: Float, var y: Float, val isBad: Boolean) {
         val size = 36f
         val bounds = Rectangle(x, y, size, size)
@@ -108,19 +163,18 @@ class GameScreen : ScreenAdapter() {
         val width = 64f
         val blockSize = 64f
         var scored = false
-
         val isDoubleGap: Boolean = !isFlyingBlock && MathUtils.randomBoolean(0.15f)
 
         val bottomBlocks: Int
         val topBlocks: Int
         val gapBlocks: Int
-
         var sideSpikePos: Int = 0
 
         val bottomBounds: Rectangle
         val topBounds: Rectangle
         var middleBounds: Rectangle? = null
         var sideSpikeBounds: Rectangle? = null
+        val crystal: Amethyst?
 
         init {
             if (isFlyingBlock) {
@@ -134,11 +188,18 @@ class GameScreen : ScreenAdapter() {
                     topBlocks = 7
                 }
                 gapBlocks = 4
+                crystal = null
             } else if (isDoubleGap) {
                 sideSpikePos = 0
                 bottomBlocks = 2
                 topBlocks = 2
                 gapBlocks = 7
+
+                val bottomY = bottomBlocks * blockSize
+                val crystalY = bottomY + 12f
+                crystal = if (currentStage == GameStage.SPIKES_100) {
+                    Amethyst(x + (width / 2f) - 18f, crystalY)
+                } else null
             } else {
                 if (MathUtils.randomBoolean(0.30f)) {
                     sideSpikePos = MathUtils.random(1, 2)
@@ -153,10 +214,15 @@ class GameScreen : ScreenAdapter() {
                 lastBottomBlocks = blocks
 
                 bottomBlocks = blocks
-
                 val hasSideSpike = (sideSpikePos == 1 && bottomBlocks >= 2) || (sideSpikePos == 2 && (11 - bottomBlocks - 4) >= 2)
                 gapBlocks = if (hasSideSpike) 5 else 4
                 topBlocks = (11 - bottomBlocks - gapBlocks).coerceAtLeast(0)
+
+                crystal = if (currentStage == GameStage.SPIKES_100 && MathUtils.randomBoolean(0.10f)) {
+                    val bottomY = bottomBlocks * blockSize
+                    val crystalY = bottomY + (gapBlocks * blockSize / 2f) - 18f
+                    Amethyst(x + (width / 2f) - 18f, crystalY)
+                } else null
             }
 
             val bottomY = bottomBlocks * blockSize
@@ -188,6 +254,7 @@ class GameScreen : ScreenAdapter() {
             topBounds.x = x
             middleBounds?.x = x
             sideSpikeBounds?.x = x - 24f
+            crystal?.update(delta, speed)
         }
 
         fun draw(batch: SpriteBatch) {
@@ -206,14 +273,9 @@ class GameScreen : ScreenAdapter() {
                 val drawY = 720f - ((i + 1) * blockSize)
                 if (i == topBlocks - 1 && !isFlyingBlock) {
                     batch.draw(
-                        spikeTex,
-                        x, drawY,
-                        width / 2f, (blockSize + overlap) / 2f,
-                        width, blockSize + overlap,
-                        1f, 1f,
-                        180f, 0, 0,
-                        spikeTex.width, spikeTex.height,
-                        false, false
+                        spikeTex, x, drawY, width / 2f, (blockSize + overlap) / 2f,
+                        width, blockSize + overlap, 1f, 1f, 180f, 0, 0,
+                        spikeTex.width, spikeTex.height, false, false
                     )
                 } else {
                     batch.draw(blockTex, x, drawY, width, blockSize)
@@ -225,44 +287,30 @@ class GameScreen : ScreenAdapter() {
                 val mH = m.height
 
                 batch.draw(
-                    spikeTex,
-                    x, mY,
-                    width / 2f, blockSize / 2f,
-                    width, blockSize,
-                    1f, 1f,
-                    180f, 0, 0,
-                    spikeTex.width, spikeTex.height,
-                    false, false
+                    spikeTex, x, mY, width / 2f, blockSize / 2f,
+                    width, blockSize, 1f, 1f, 180f, 0, 0,
+                    spikeTex.width, spikeTex.height, false, false
                 )
-
                 batch.draw(spikeTex, x, mY + mH - blockSize, width, blockSize)
             }
 
             if (sideSpikePos == 1 && bottomBlocks >= 2 && !isFlyingBlock) {
                 val sideY = (bottomBlocks - 2) * blockSize
                 batch.draw(
-                    spikeTex,
-                    x - blockSize + 10f, sideY,
-                    blockSize / 2f, blockSize / 2f,
-                    blockSize, blockSize,
-                    1f, 1f,
-                    90f, 0, 0,
-                    spikeTex.width, spikeTex.height,
-                    false, false
+                    spikeTex, x - blockSize + 10f, sideY, blockSize / 2f, blockSize / 2f,
+                    blockSize, blockSize, 1f, 1f, 90f, 0, 0,
+                    spikeTex.width, spikeTex.height, false, false
                 )
             } else if (sideSpikePos == 2 && topBlocks >= 2 && !isFlyingBlock) {
                 val sideY = 720f - ((topBlocks - 1) * blockSize)
                 batch.draw(
-                    spikeTex,
-                    x - blockSize + 10f, sideY,
-                    blockSize / 2f, blockSize / 2f,
-                    blockSize, blockSize,
-                    1f, 1f,
-                    90f, 0, 0,
-                    spikeTex.width, spikeTex.height,
-                    false, false
+                    spikeTex, x - blockSize + 10f, sideY, blockSize / 2f, blockSize / 2f,
+                    blockSize, blockSize, 1f, 1f, 90f, 0, 0,
+                    spikeTex.width, spikeTex.height, false, false
                 )
             }
+
+            crystal?.draw(batch)
         }
     }
 
@@ -275,7 +323,9 @@ class GameScreen : ScreenAdapter() {
     private var isGameOver = false
 
     override fun show() {
-        propellerSound?.play()
+        if (!isMuted) {
+            propellerSound?.play()
+        }
     }
 
     override fun render(delta: Float) {
@@ -283,7 +333,17 @@ class GameScreen : ScreenAdapter() {
             isPaused = !isPaused
             if (isPaused) {
                 propellerSound?.pause()
-            } else if (!isGameOver) {
+            } else if (!isGameOver && !isMuted) {
+                propellerSound?.play()
+            }
+        }
+
+        // Кнопка M для отключения звука
+        if (Gdx.input.isKeyJustPressed(Input.Keys.M)) {
+            isMuted = !isMuted
+            if (isMuted) {
+                propellerSound?.pause()
+            } else if (!isGameOver && !isPaused) {
                 propellerSound?.play()
             }
         }
@@ -306,6 +366,8 @@ class GameScreen : ScreenAdapter() {
             font.color = Color.YELLOW
             font.draw(batch, "PAUSED", 570f, 400f)
             font.draw(batch, "Press ESC to Resume", 480f, 340f)
+            val soundStatus = if (isMuted) "OFF" else "ON"
+            font.draw(batch, "Press M to Toggle Sound [$soundStatus]", 420f, 280f)
             batch.end()
         }
     }
@@ -318,25 +380,28 @@ class GameScreen : ScreenAdapter() {
     }
 
     private fun updateLogic(delta: Float) {
+        // Проверка перехода на следующую стадию
+        if (currentStage == GameStage.SPIKES_100 && score >= 100) {
+            currentStage = GameStage.EMPTY_TRANSITION
+            transitionDistance = 0f
+            obstacles.clear() // Убираем все препятствия
+        }
+
+        // Расход батареи только на стадии WALKING_GAME
+        if (currentStage == GameStage.WALKING_GAME) {
+            val drainRate = if (isBadBatteryActive) 5.0f else 1.0f
+            batteryLevel -= delta * drainRate
+
+            if (batteryLevel <= 0f) {
+                batteryLevel = 0f
+                gameOver("Батарея разряжена!")
+            }
+        }
+
         propellerSound?.let { sound ->
-            if (!sound.isPlaying) sound.play()
-        }
-
-        // Горячие клавиши для быстрого спавна при съемке ролика
-        if (Gdx.input.isKeyJustPressed(Input.Keys.B)) {
-            batteries.add(Battery(1280f, 360f - 18f, isBad = false))
-        }
-        if (Gdx.input.isKeyJustPressed(Input.Keys.N)) {
-            batteries.add(Battery(1280f, 360f - 18f, isBad = true))
-        }
-
-        // --- Расход аккумулятора (5% в сек для плохой, 1% для хорошей) ---
-        val drainRate = if (isBadBatteryActive) 5.0f else 1.0f
-        batteryLevel -= delta * drainRate
-
-        if (batteryLevel <= 0f) {
-            batteryLevel = 0f
-            gameOver("Батарея разряжена!")
+            if (!sound.isPlaying && !isMuted && !isGameOver && !isPaused) {
+                sound.play()
+            }
         }
 
         velocityY -= gravity * delta
@@ -367,20 +432,38 @@ class GameScreen : ScreenAdapter() {
 
         bgScrollTimer += delta * (actualScrollSpeed * 0.005f)
 
+        // Обновление анимации ходьбы
+        val isOnGround = droneBounds.y <= 1f
+        if (isOnGround) {
+            walkStateTime += delta
+        } else {
+            walkStateTime = 0f
+        }
+
+        // Переход между стадиями
+        if (currentStage == GameStage.EMPTY_TRANSITION) {
+            transitionDistance += actualScrollSpeed * delta
+            if (transitionDistance >= transitionTargetDistance) {
+                currentStage = GameStage.WALKING_GAME
+            }
+        }
+
         if (droneBounds.x < 0f) { droneBounds.x = 0f; velocityX = 0f }
         if (droneBounds.x > 1280f - droneBounds.width) { droneBounds.x = 1280f - droneBounds.width; velocityX = 0f }
         if (droneBounds.y < 0f) droneBounds.y = 0f
         if (droneBounds.y > 720f - droneBounds.height) droneBounds.y = 720f - droneBounds.height
 
-        // --- Независимый спавн аккумулятора ---
-        batterySpawnTimer += delta
-        if (batterySpawnTimer >= 20f) {
-            batterySpawnTimer = 0f
-            val isBad = MathUtils.randomBoolean(0.10f)
-            batteries.add(Battery(1280f, 360f - 18f, isBad))
+        // Спавн батареек только на стадии WALKING_GAME
+        if (currentStage == GameStage.WALKING_GAME) {
+            batterySpawnTimer += delta
+            if (batterySpawnTimer >= 20f) {
+                batterySpawnTimer = 0f
+                val isBad = MathUtils.randomBoolean(0.10f)
+                batteries.add(Battery(1280f, 360f - 18f, isBad))
+            }
         }
 
-        // Обновление и подбор аккумов
+        // Обновление батареек
         val batIterator = batteries.iterator()
         while (batIterator.hasNext()) {
             val bat = batIterator.next()
@@ -402,27 +485,28 @@ class GameScreen : ScreenAdapter() {
             }
         }
 
-        spawnTimer += delta
-        if (spawnTimer >= spawnInterval) {
-            val is15Level = (score > 0) && (score % 15 == 0)
+        // Спавн препятствий только на стадиях SPIKES_100 и WALKING_GAME
+        if (currentStage == GameStage.SPIKES_100 || currentStage == GameStage.WALKING_GAME) {
+            spawnTimer += delta
+            if (spawnTimer >= spawnInterval) {
+                val is15Level = (score > 0) && (score % 15 == 0)
+                obstacles.add(ObstaclePattern(1280f, isFlyingBlock = is15Level))
 
-            obstacles.add(ObstaclePattern(1280f, isFlyingBlock = is15Level))
-
-            if (!is15Level && MathUtils.randomBoolean(0.20f)) {
-                obstacles.add(ObstaclePattern(1280f + 320f))
-                spawnTimer = -0.4f
-            } else {
-                spawnTimer = 0f
+                if (!is15Level && MathUtils.randomBoolean(0.20f)) {
+                    obstacles.add(ObstaclePattern(1280f + 320f))
+                    spawnTimer = -0.4f
+                } else {
+                    spawnTimer = 0f
+                }
             }
         }
 
+        // Обновление препятствий
         val iterator = obstacles.iterator()
         while (iterator.hasNext()) {
             val obstacle = iterator.next()
-
             obstacle.update(delta, actualScrollSpeed)
 
-            // === ПРОВЕРКА КОЛЛИЗИЙ (РАСКОММЕНТИРУЙТЕ, ЧТОБЫ ОТКЛЮЧИТЬ НОУКЛИП) ===
             val hitBottom = droneBounds.overlaps(obstacle.bottomBounds)
             val hitTop = droneBounds.overlaps(obstacle.topBounds)
             val hitMiddle = obstacle.middleBounds?.let { droneBounds.overlaps(it) } ?: false
@@ -431,6 +515,13 @@ class GameScreen : ScreenAdapter() {
             if (hitBottom || hitTop || hitMiddle || hitSide) {
                 gameOver("Столкновение!")
                 return
+            }
+
+            obstacle.crystal?.let { crystal ->
+                if (!crystal.collected && crystal.bounds.overlaps(droneBounds)) {
+                    crystal.collected = true
+                    score += 5
+                }
             }
 
             if (!obstacle.scored && obstacle.x + obstacle.width < droneBounds.x) {
@@ -482,7 +573,13 @@ class GameScreen : ScreenAdapter() {
             rotationAngle += 150f * Gdx.graphics.deltaTime
         }
 
-        val currentFrame = droneAnimation.getKeyFrame(stateTime)
+        // Выбор анимации
+        val isOnGround = droneBounds.y <= 1f
+        val currentFrame = if (isOnGround) {
+            walkAnimation.getKeyFrame(walkStateTime)
+        } else {
+            flyAnimation.getKeyFrame(stateTime)
+        }
 
         val drawWidth = 140f
         val drawHeight = 70f
@@ -490,12 +587,8 @@ class GameScreen : ScreenAdapter() {
         val drawY = droneBounds.y - (drawHeight - droneBounds.height) / 2f
 
         batch.draw(
-            currentFrame,
-            drawX, drawY,
-            drawWidth / 2f, drawHeight / 2f,
-            drawWidth, drawHeight,
-            1f, 1f,
-            rotationAngle
+            currentFrame, drawX, drawY, drawWidth / 2f, drawHeight / 2f,
+            drawWidth, drawHeight, 1f, 1f, rotationAngle
         )
 
         if (isGameOver) {
@@ -508,15 +601,17 @@ class GameScreen : ScreenAdapter() {
             font.color = Color.YELLOW
             font.draw(batch, "Score: $score", 40f, 680f)
 
-            val activeTex = if (isBadBatteryActive) batteryBadTex else batteryGoodTex
-            activeTex?.let { tex ->
-                batch.draw(tex, 40f, 575f, 32f, 32f)
+            if (currentStage == GameStage.WALKING_GAME) {
+                val activeTex = if (isBadBatteryActive) batteryBadTex else batteryGoodTex
+                activeTex?.let { tex ->
+                    batch.draw(tex, 40f, 575f, 32f, 32f)
+                }
             }
         }
 
         batch.end()
 
-        if (!isGameOver) {
+        if (!isGameOver && currentStage == GameStage.WALKING_GAME) {
             Gdx.gl.glEnable(GL20.GL_BLEND)
             shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
 
@@ -539,7 +634,6 @@ class GameScreen : ScreenAdapter() {
             shapeRenderer.color = barColor
             val fillWidth = (batteryLevel / 100f) * 200f
             shapeRenderer.rect(42f, 622f, fillWidth, 20f)
-
             shapeRenderer.end()
 
             batch.begin()
@@ -554,6 +648,7 @@ class GameScreen : ScreenAdapter() {
         velocityX = 0f
         velocityY = 0f
         rotationAngle = 0f
+        walkStateTime = 0f
         obstacles.clear()
         batteries.clear()
         spawnTimer = 0f
@@ -562,7 +657,11 @@ class GameScreen : ScreenAdapter() {
         batteryLevel = 100f
         isBadBatteryActive = false
         isGameOver = false
-        propellerSound?.play()
+        currentStage = GameStage.SPIKES_100
+        transitionDistance = 0f
+        if (!isMuted) {
+            propellerSound?.play()
+        }
     }
 
     override fun dispose() {
@@ -571,7 +670,12 @@ class GameScreen : ScreenAdapter() {
         font.dispose()
         droneOnTexture.dispose()
         droneOffTexture.dispose()
+        walk1OnTex.dispose()
+        walk2OnTex.dispose()
+        walk1OffTex.dispose()
+        walk2OffTex.dispose()
         bgTexture.dispose()
+        amethystTexture?.dispose()
         batteryGoodTex?.dispose()
         batteryBadTex?.dispose()
         blockTex.dispose()
